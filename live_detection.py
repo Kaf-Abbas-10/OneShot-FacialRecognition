@@ -15,6 +15,9 @@ ref_rgb = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2RGB)
 # Build ArcFace model once (reduces per-frame overhead)
 model = DeepFace.build_model("ArcFace")
 
+# OpenCV face detector (Haar cascade)
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
 cap = cv2.VideoCapture(0)
 
 def draw_status(frame, verified):
@@ -56,17 +59,47 @@ while True:
     if not ret:
         break
 
+    # Detect faces using Haar cascade (for visualization & to decide when to verify)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+
+    face_present = len(faces) > 0
+
+    # By default, no rectangle drawn; if faces found, draw them
+    if face_present:
+        # Draw rectangles for all detected faces (color depends on verification)
+        for (x, y, w, h) in faces:
+            # Rectangle color: green if verified, yellow if face present but not verified
+            if verified:
+                rect_color = (0, 255, 0)
+            else:
+                rect_color = (0, 255, 255)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), rect_color, 2)
+
     # Convert current frame to RGB (DeepFace expects RGB arrays)
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    # Run verification only every `frame_interval` frames
-    if frame_count % frame_interval == 0:
+    # Run verification only every `frame_interval` frames (and only if a face detected)
+    if frame_count % frame_interval == 0 and face_present:
+        # Use the first detected face region as the candidate for verification
+        x, y, w, h = faces[0]
+        # Add small padding around the face crop
+        pad = int(0.2 * max(w, h))
+        x1 = max(0, x - pad)
+        y1 = max(0, y - pad)
+        x2 = min(frame.shape[1], x + w + pad)
+        y2 = min(frame.shape[0], y + h + pad)
+        crop_rgb = frame_rgb[y1:y2, x1:x2]
+
         try:
-            result = DeepFace.verify(img1_path=ref_rgb, img2_path=frame_rgb, model_name="ArcFace", model=model)
+            result = DeepFace.verify(img1_path=ref_rgb, img2_path=crop_rgb, model_name="ArcFace", model=model)
             verified = bool(result.get("verified", False))
         except Exception:
-            # If verification fails (e.g., no face detected), keep verified False
+            # If verification fails (e.g., face not clear), keep verified False
             verified = False
+    elif frame_count % frame_interval == 0 and not face_present:
+        # No face to verify
+        verified = False
 
     frame_count += 1
 
