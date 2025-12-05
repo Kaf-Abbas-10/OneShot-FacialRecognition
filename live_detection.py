@@ -12,15 +12,14 @@ if ref_bgr is None:
     sys.exit(1)
 ref_rgb = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2RGB)
 
-# Build ArcFace model once (reduces per-frame overhead)
-model = DeepFace.build_model("ArcFace")
+# Note: DeepFace will cache the model internally, so we don't need to build it separately
 
 # OpenCV face detector (Haar cascade)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 cap = cv2.VideoCapture(0)
 
-def draw_status(frame, verified):
+def draw_status(frame, verified, distance=None, threshold=None):
     # Top-left box settings
     box_x, box_y = 10, 10
     box_w, box_h = 120, 80
@@ -49,10 +48,32 @@ def draw_status(frame, verified):
         cv2.line(frame, (box_x + 15, box_y + 15), (box_x + box_w - 15, box_y + box_h - 15), mark_color, thickness, cv2.LINE_AA)
         cv2.line(frame, (box_x + box_w - 15, box_y + 15), (box_x + 15, box_y + box_h - 15), mark_color, thickness, cv2.LINE_AA)
 
+    # Display confidence score below the status box (only if we have valid data)
+    if distance is not None and threshold is not None:
+        # Calculate confidence score (lower distance = higher confidence)
+        # Convert distance to a 0-100 confidence score
+        confidence = max(0, min(100, (1 - (distance / threshold)) * 100))
+        
+        # Display distance and confidence
+        text_y = box_y + box_h + 25
+        cv2.putText(frame, f"Distance: {distance:.3f}", (box_x, text_y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"Confidence: {confidence:.1f}%", (box_x, text_y + 25), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"Threshold: {threshold:.3f}", (box_x, text_y + 50), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+    else:
+        # Display "No data" when distance is None
+        text_y = box_y + box_h + 25
+        cv2.putText(frame, "No verification data", (box_x, text_y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 2, cv2.LINE_AA)
+
 # Optional: verify every N frames to reduce load (set to 1 to verify each frame)
 frame_interval = 2
 frame_count = 0
 verified = False
+distance = None
+threshold = None
 
 while True:
     ret, frame = cap.read()
@@ -92,19 +113,27 @@ while True:
         crop_rgb = frame_rgb[y1:y2, x1:x2]
 
         try:
-            result = DeepFace.verify(img1_path=ref_rgb, img2_path=crop_rgb, model_name="ArcFace", model=model)
+            result = DeepFace.verify(img1_path=ref_rgb, img2_path=crop_rgb, model_name="ArcFace", enforce_detection=False)
             verified = bool(result.get("verified", False))
-        except Exception:
+            distance = result.get("distance", None)
+            threshold = result.get("threshold", None)
+            print(f"Verification result: verified={verified}, distance={distance}, threshold={threshold}")
+        except Exception as e:
             # If verification fails (e.g., face not clear), keep verified False
+            print(f"Verification failed: {e}")
             verified = False
+            distance = None
+            threshold = None
     elif frame_count % frame_interval == 0 and not face_present:
         # No face to verify
         verified = False
+        distance = None
+        threshold = None
 
     frame_count += 1
 
-    # Draw status indicator (tick/cross) in top-left corner
-    draw_status(frame, verified)
+    # Draw status indicator (tick/cross) in top-left corner with confidence score
+    draw_status(frame, verified, distance, threshold)
 
     cv2.imshow("Webcam", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
