@@ -1,6 +1,7 @@
 from deepface import DeepFace
 import cv2
 import sys
+import numpy as np
 
 # Reference image path
 ref_img_path = "data/me/Pic.jpg"
@@ -12,14 +13,20 @@ if ref_bgr is None:
     sys.exit(1)
 ref_rgb = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2RGB)
 
-# Note: DeepFace will cache the model internally, so we don't need to build it separately
+# Pre-compute reference embedding once (much faster!)
+print("Computing reference embedding...")
+ref_embedding = DeepFace.represent(img_path=ref_rgb, model_name="ArcFace", enforce_detection=False)[0]["embedding"]
+print("Reference embedding computed!")
+
+# ArcFace threshold (cosine distance)
+threshold = 0.68
 
 # OpenCV face detector (Haar cascade)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 cap = cv2.VideoCapture(0)
 
-def draw_status(frame, verified, distance=None, threshold=None):
+def draw_status(frame, verified, distance=None, threshold_val=None):
     # Top-left box settings
     box_x, box_y = 10, 10
     box_w, box_h = 120, 80
@@ -49,10 +56,10 @@ def draw_status(frame, verified, distance=None, threshold=None):
         cv2.line(frame, (box_x + box_w - 15, box_y + 15), (box_x + 15, box_y + box_h - 15), mark_color, thickness, cv2.LINE_AA)
 
     # Display confidence score below the status box (only if we have valid data)
-    if distance is not None and threshold is not None:
+    if distance is not None and threshold_val is not None:
         # Calculate confidence score (lower distance = higher confidence)
         # Convert distance to a 0-100 confidence score
-        confidence = max(0, min(100, (1 - (distance / threshold)) * 100))
+        confidence = max(0, min(100, (1 - (distance / threshold_val)) * 100))
         
         # Display distance and confidence
         text_y = box_y + box_h + 25
@@ -60,7 +67,7 @@ def draw_status(frame, verified, distance=None, threshold=None):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(frame, f"Confidence: {confidence:.1f}%", (box_x, text_y + 25), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(frame, f"Threshold: {threshold:.3f}", (box_x, text_y + 50), 
+        cv2.putText(frame, f"Threshold: {threshold_val:.3f}", (box_x, text_y + 50), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
     else:
         # Display "No data" when distance is None
@@ -73,7 +80,6 @@ frame_interval = 2
 frame_count = 0
 verified = False
 distance = None
-threshold = None
 
 while True:
     ret, frame = cap.read()
@@ -113,22 +119,25 @@ while True:
         crop_rgb = frame_rgb[y1:y2, x1:x2]
 
         try:
-            result = DeepFace.verify(img1_path=ref_rgb, img2_path=crop_rgb, model_name="ArcFace", enforce_detection=False)
-            verified = bool(result.get("verified", False))
-            distance = result.get("distance", None)
-            threshold = result.get("threshold", None)
-            print(f"Verification result: verified={verified}, distance={distance}, threshold={threshold}")
+            # Get embedding for current frame
+            frame_embedding = DeepFace.represent(img_path=crop_rgb, model_name="ArcFace", enforce_detection=False)[0]["embedding"]
+            
+            # Calculate cosine distance manually
+            ref_arr = np.array(ref_embedding)
+            frame_arr = np.array(frame_embedding)
+            distance = 1 - np.dot(ref_arr, frame_arr) / (np.linalg.norm(ref_arr) * np.linalg.norm(frame_arr))
+            
+            # Verify based on threshold
+            verified = distance < threshold
+            
         except Exception as e:
             # If verification fails (e.g., face not clear), keep verified False
-            print(f"Verification failed: {e}")
             verified = False
             distance = None
-            threshold = None
     elif frame_count % frame_interval == 0 and not face_present:
         # No face to verify
         verified = False
         distance = None
-        threshold = None
 
     frame_count += 1
 
