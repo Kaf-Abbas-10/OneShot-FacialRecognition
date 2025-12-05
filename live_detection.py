@@ -1,8 +1,19 @@
 from deepface import DeepFace
 import cv2
+import sys
 
-# Reference image
-ref_img = "data/me/Pic.jpg"
+# Reference image path
+ref_img_path = "data/me/Pic.jpg"
+
+# Read reference image once and convert to RGB
+ref_bgr = cv2.imread(ref_img_path)
+if ref_bgr is None:
+    print(f"Reference image not found at '{ref_img_path}'. Exiting.")
+    sys.exit(1)
+ref_rgb = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2RGB)
+
+# Build ArcFace model once (reduces per-frame overhead)
+model = DeepFace.build_model("ArcFace")
 
 cap = cv2.VideoCapture(0)
 
@@ -35,21 +46,29 @@ def draw_status(frame, verified):
         cv2.line(frame, (box_x + 15, box_y + 15), (box_x + box_w - 15, box_y + box_h - 15), mark_color, thickness, cv2.LINE_AA)
         cv2.line(frame, (box_x + box_w - 15, box_y + 15), (box_x + 15, box_y + box_h - 15), mark_color, thickness, cv2.LINE_AA)
 
+# Optional: verify every N frames to reduce load (set to 1 to verify each frame)
+frame_interval = 2
+frame_count = 0
+verified = False
+
 while True:
     ret, frame = cap.read()
     if not ret:
         break
 
-    # Save current frame to temp file (DeepFace.verify accepts paths)
-    cv2.imwrite("current.jpg", frame)
+    # Convert current frame to RGB (DeepFace expects RGB arrays)
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    verified = False
-    try:
-        result = DeepFace.verify(img1_path=ref_img, img2_path="current.jpg", model_name="ArcFace")
-        verified = bool(result.get("verified", False))
-    except Exception:
-        # If verification fails (e.g., no face detected), keep verified False
-        verified = False
+    # Run verification only every `frame_interval` frames
+    if frame_count % frame_interval == 0:
+        try:
+            result = DeepFace.verify(img1_path=ref_rgb, img2_path=frame_rgb, model_name="ArcFace", model=model)
+            verified = bool(result.get("verified", False))
+        except Exception:
+            # If verification fails (e.g., no face detected), keep verified False
+            verified = False
+
+    frame_count += 1
 
     # Draw status indicator (tick/cross) in top-left corner
     draw_status(frame, verified)
